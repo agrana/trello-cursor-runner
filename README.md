@@ -18,15 +18,36 @@ The runner fetches the full task, checklists, attachment metadata, recent commen
 
 The owner’s active checkout and uncommitted work are preserved. Cursor is instructed to prepare worktree-local dependencies using the project’s pinned runtime; no production environment files are copied. File/workspace selection and Cursor's `--force` are not a sandbox: this is an explicitly authorized local coding agent running under the owner's account.
 
-Successful acceptance and required CI move a card to the configured Review list with its PR and evidence. The runner never merges or deploys. Configure required CI job names per project. For a project without remote CI, explicitly set `allow_no_ci: true` with an empty `required_checks` list and appropriate local checks. After a discovery grace period, absence of remote checks is reported explicitly rather than claimed as CI success.
+Successful acceptance and required CI move a card to the configured Review list with its PR and evidence. The runner never merges or deploys. Configure required CI job names per project. For a project without remote CI, explicitly set `allow_no_ci: true` with an empty `required_checks` list and appropriate local checks. After a discovery grace period, absence of remote checks is reported explicitly rather than claimed as CI success. This initial-review opt-in does not waive the passing-CI requirement for automatic Done after merge.
 
 Failures preserve artifacts and move the card to Blocked. An interrupted claim is reconciled as blocked, never automatically relaunched. A failed final Trello update retains an outbox state; later polls retry only that update. If the owner moves/archives a card, the runner preserves that decision. Specification edits before publication stop the run for scope reconciliation. Acceptance evidence is supplied by the executor plus configured checks; human review remains responsible for semantic completeness.
+
+## PR feedback, closure and merge
+
+Enable `pull_requests.enabled` in local configuration to continue monitoring linked PRs on each poll. PRs already recorded in the local run history are adopted automatically. The persistent link records the card, repository, branch, PR and handled feedback. The runner attaches the PR URL to the card and ensures the PR body or conversation links back to the card.
+
+| PR event | Card and execution behavior |
+| --- | --- |
+| Open, with new published feedback | After a short quiet period, move Review to In Progress and resume Cursor on the existing branch/worktree/PR. Verify, push fixes, reply with evidence, resolve addressed inline threads, then return to Review. No routing label is needed for these follow-ups. |
+| Open, no new feedback | Continue polling without launching a model. |
+| Closed without merging | Move the card to Blocked with the closure reason and stop monitoring this PR. Investigate before manually handing off or reopening work. |
+| Merged, CI missing/pending | Stop feedback execution; keep checking CI and explain the wait on the card. |
+| Merged, CI fails | Move the card to Blocked with the failure reason. Keep monitoring CI reruns; launch no implementation automatically after merge. |
+| Merged, CI passes | Move the card to Done, record final-head and merge-commit evidence, then stop monitoring. |
+
+Done requires actual passing checks on both the final PR head and merged commit, including configured required checks. Missing checks and a set of skipped/neutral jobs do not count as passing CI. No-CI projects therefore need real CI before this automatic completion gate can succeed. Pending status updates recheck these conditions before moving the card.
+
+Review feedback includes inline comments, PR conversation comments and submitted review bodies. Draft reviews and resolved threads are skipped. Only configured `allowed_reviewers` or the configured `trusted_associations` can release automatic work; defaults trust repository owners, members and collaborators. Add a particular review bot's login to your local allowlist if its feedback should trigger fixes. Runner replies carry stable markers, so they do not trigger another run even when the runner and reviewer use the same GitHub account.
+
+`debounce_seconds` batches nearby comments (default 60); `max_review_rounds` bounds model executions per PR (default 10). Comment edits are new feedback; unchanged comments are processed once. Replies and thread resolutions have a durable outbox, so retrying an uncertain API response does not rerun implementation or duplicate replies. A newer comment on a thread or an unexpected PR-head change prevents stale resolution. Top-level conversation comments receive an evidence-backed reply; only inline review threads have GitHub's resolve action.
+
+The existing worktree must be clean and match the linked branch. Only a fast-forward update to the current PR head is accepted; no reset, force-push, extra PR or merge is performed. Ambiguous scope, disputed requests, missing prerequisites or failed verification remain blocked for owner review. Moving the card outside the configured active/review/blocked/done lists or archiving it suspends automatic card transitions. Pausing the runner prevents new feedback execution and new lifecycle polling.
 
 ## Requirements
 
 - A POSIX host with Python 3.11+ including SQLite, Git, GitHub CLI (`gh`) and Cursor CLI (`cursor-agent`). The runner uses Python's standard library; no pip dependencies are required. The bundled scheduler additionally requires Linux and a running systemd user manager. Windows is not supported directly.
 - Cursor authenticated under the account running the service, with access to the configured model and sufficient usage allowance. Check with `cursor-agent status`.
-- GitHub authentication that can read the project repositories, push task branches, create/update pull requests and inspect CI. Check `gh auth status` and verify the repository's Git transport works without interactive prompts.
+- GitHub authentication that can read the project repositories, push task branches, create/update pull requests and inspect CI. PR lifecycle monitoring also needs read access to PR reviews, comments, check runs and commit statuses; responding and resolving threads requires PR write permission. Check `gh auth status` and verify the repository's Git transport works without interactive prompts.
 - Trello API key/token with read/write access to the configured board, including cards, labels and comments. Configure the workflow list IDs and create the routing label on the board.
 - Existing local Git checkouts with the configured GitHub origins and base branches. Each project supplies its own runtime, dependencies, test tools and verification commands; the runner does not replace those requirements.
 - A delivery skill directory containing `SKILL.md` and its referenced files, plus accessible Trello project brief/contract cards and usable acceptance criteria.
@@ -115,6 +136,10 @@ When `metrics_file` is configured, the runner atomically writes Prometheus metri
 | `trello_cursor_run_transitions_total{status}` | Monotonic state-transition counters, including Review and Blocked |
 | `trello_cursor_runs{status}` | Retained run records grouped by their current state |
 | `trello_cursor_last_run_duration_seconds` | Most recently completed execution duration |
+| `trello_cursor_review_rounds_started_total` | Automatic PR feedback runs started |
+| `trello_cursor_pull_requests_monitored` | PRs still watched for feedback or merge CI |
+| `trello_cursor_pull_requests_waiting_merge_ci` | Merged PRs waiting for CI evidence |
+| `trello_cursor_pull_requests_failed_merge_ci` | Merged PRs blocked by failing CI |
 
 Import `grafana/trello-cursor-runner.json` into Grafana or install it in your own dashboard-provisioning source. Select a Prometheus datasource using the dashboard's datasource selector. Dashboard UID: `trello-cursor-runner`. It shows heartbeat age, active work, queue, pause, errors, outcomes and duration. With minute polling, idle heartbeat age should normally stay below two minutes; use heartbeat rather than last queue-read time to monitor a long active run. A stale existing file remains observable through the timestamp when a crash prevents rewriting metrics.
 
@@ -127,4 +152,4 @@ python3 -m unittest discover -s tests -v
 python3 runner.py preview
 ```
 
-Tests cover trigger matching, dependency gates, durable ownership, duplicate suppression, pause, interruption and outcome recovery, changed scope, remote identity, required CI and telemetry. The integration fixture uses a fake Cursor executable and hosted APIs with real Git worktrees, independent checks, commits and a local remote push. It makes no real model calls, Trello changes or GitHub PRs. Verify an actual owner-released card separately for live Cursor delivery.
+Tests cover trigger matching, dependency gates, durable ownership, duplicate suppression, pause, interruption and outcome recovery, changed scope, remote identity, required CI and telemetry. PR tests cover bidirectional links, paginated feedback, trusted reviewers, edited comments, deduplicated replies, stale-thread protection, closure, merge CI failures/reruns and Done recovery. Integration fixtures use a fake Cursor executable and hosted APIs with real Git worktrees, independent checks, commits and a local remote push, including feedback fixes on an existing PR. They make no real model calls, Trello changes or GitHub PRs.

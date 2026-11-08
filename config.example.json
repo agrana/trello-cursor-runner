@@ -21,6 +21,13 @@
   "ci_poll_seconds": 30,
   "ci_discovery_seconds": 60,
   "max_repairs": 1,
+  "pull_requests": {
+    "enabled": true,
+    "allowed_reviewers": [],
+    "trusted_associations": ["OWNER", "MEMBER", "COLLABORATOR"],
+    "debounce_seconds": 60,
+    "max_review_rounds": 10
+  },
   "projects": [
     {
       "name": "Example project",
