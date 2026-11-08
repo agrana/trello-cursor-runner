@@ -1,0 +1,60 @@
+{
+  "board_id": "6adb9da376335728b0a37893",
+  "ready_label": "ready_for_cursor",
+  "lists": {
+    "in_progress": "6adb9da4fd08d84827b2a674",
+    "review": "6adb9da45b22c5598b24e464",
+    "blocked": "6adb9da491e21d1bb17ea7a1",
+    "done": "6adb9da59c61ea6cf9c1273b"
+  },
+  "state_dir": "/home/alfonso/.local/state/trello-cursor-runner",
+  "metrics_file": "/home/alfonso/.config/grafana-monitoring/node-exporter/textfile/trello_cursor_runner.prom",
+  "credential_file": "/home/alfonso/.hermes/.env",
+  "skill_dir": "/home/alfonso/.local/share/agent-skills/trello-delivery",
+  "cursor_binary": "/home/alfonso/.local/bin/cursor-agent",
+  "model": "auto",
+  "run_timeout_seconds": 7200,
+  "agent_timeout_seconds": 3600,
+  "repair_timeout_seconds": 1200,
+  "check_timeout_seconds": 900,
+  "ci_timeout_seconds": 1200,
+  "ci_poll_seconds": 30,
+  "ci_discovery_seconds": 60,
+  "max_repairs": 1,
+  "environment": {
+    "PATH": "/home/alfonso/.local/bin:/usr/local/bin:/usr/bin:/bin"
+  },
+  "projects": [
+    {
+      "name": "Uno Decision Arena",
+      "card_pattern": "^\\[UNO-[0-9]+\\]",
+      "repository": "agrana/agent-arena",
+      "checkout": "/home/alfonso/Documents/code/agent-arena",
+      "base": "main",
+      "context_cards": ["6adb9da505fe1c0de4e1ba6b", "6af053fc7753f7bebf3b6dd7"],
+      "checks": [["npm", "run", "typecheck"]],
+      "required_checks": ["Lint / typecheck / test / build / security"]
+    },
+    {
+      "name": "Reusable app template",
+      "card_pattern": "^\\[APP-[0-9]+\\]",
+      "repository": "agrana/free_personal_stack",
+      "checkout": "/home/alfonso/Documents/code/free-personal-stack-agents",
+      "base": "main",
+      "context_cards": ["6adba342e66c48493aa0e164", "6af053fc7753f7bebf3b6dd7"],
+      "checks": [["npm", "run", "typecheck"]],
+      "required_checks": ["Lint / typecheck / test / build / security"]
+    },
+    {
+      "name": "AI Usage Dashboard",
+      "card_pattern": "^\\[AIDASH-[0-9]+\\]",
+      "repository": "agrana/aidash",
+      "checkout": "/home/alfonso/Documents/code/aidash",
+      "base": "main",
+      "context_cards": ["6aef0a248802ce8187812977", "6af053fc7753f7bebf3b6dd7"],
+      "checks": [["/home/alfonso/Documents/code/aidash/.venv/bin/python", "-m", "pytest", "-q"]],
+      "required_checks": [],
+      "allow_no_ci": true
+    }
+  ]
+}

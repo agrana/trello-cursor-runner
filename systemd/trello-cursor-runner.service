@@ -1,0 +1,16 @@
+[Unit]
+Description=Claim one eligible Trello card and deliver it with Cursor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/code/trello-cursor-runner
+ExecStart=/usr/bin/python3 %h/Documents/code/trello-cursor-runner/runner.py run
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+TimeoutStartSec=125min
+TimeoutStopSec=20
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal

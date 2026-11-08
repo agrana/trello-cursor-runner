@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll the Apps Trello board for Cursor assignments every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+Unit=trello-cursor-runner.service
+
+[Install]
+WantedBy=timers.target
