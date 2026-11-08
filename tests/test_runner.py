@@ -127,6 +127,28 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.runner.executions, 1)
         self.assertIn("Missing prerequisite", self.store.latest("task")["message"])
 
+    def test_manual_handoff_suppresses_automatic_pickup(self):
+        self.runner.failure = "Requires a chosen model"
+        self.runner.tick()
+        run = self.store.latest("task")
+        run["status"] = "handoff"
+        self.store.save(run)
+        self.api.cards["task"].update(idList="active", labels=card()["labels"])
+        self.runner.tick()
+        self.assertEqual(self.runner.executions, 1)
+
+    def test_deliberate_retry_creates_new_history_without_discarding_old_run(self):
+        self.runner.failure = "Missing prerequisite"
+        self.runner.tick()
+        first = self.store.latest("task")
+        first["status"] = "released"
+        self.store.save(first)
+        self.api.cards["task"].update(idList="active", labels=card()["labels"])
+        self.runner.failure = None
+        self.assertEqual(self.runner.tick()["status"], "review")
+        self.assertEqual(len(self.store.all()), 2)
+        self.assertEqual(self.runner.executions, 2)
+
     def test_reservation_is_durable_before_executor(self):
         def execute(run):
             self.assertEqual(self.store.latest("task")["status"], "running")

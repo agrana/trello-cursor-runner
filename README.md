@@ -17,6 +17,7 @@ Currently configured:
 | UNO | agrana/agent-arena | main |
 | APP | agrana/free_personal_stack | main |
 | AIDASH | agrana/aidash | main |
+| RUNNER | agrana/trello-cursor-runner | main |
 
 Codex writes tasks interactively with the owner; Cursor is the automatic executor; Pi is an explicitly assigned backup or model-specific executor. Hermes supports status inspection when asked. The shared local skill is `~/.local/share/agent-skills/trello-delivery/SKILL.md`. A copy of the contract must be installed or passed to any remote execution environment.
 
@@ -96,6 +97,8 @@ The runner atomically writes `trello_cursor_runner.prom` into the existing node-
 | `trello_cursor_last_run_duration_seconds` | Most recently completed execution duration |
 
 `grafana/trello-cursor-runner.json` uses the existing datasource UID `prometheus`. Install it in the existing Grafana provisioned dashboards directory. Dashboard UID: `trello-cursor-runner`. It shows heartbeat age, active work, queue, pause, errors, outcomes and duration. Idle heartbeat age should normally stay below two minutes; use heartbeat rather than last queue-read time to monitor a long active run. A stale existing file remains observable through the timestamp when a crash prevents rewriting metrics.
+
+On this host, `monitoring-dashboard-git-sync` mirrors `~/Documents/code/home-monitoring/grafana/dashboards/` with deletion enabled. The dashboard must also exist at that source path to survive sync. The installed copies are `Monitoring/trello-cursor-runner.json` in both the source tree and the provisioned directory. Keep them synchronized with the version in this repository when changing the dashboard.
 
 ## Validation
 

@@ -26,6 +26,16 @@
   },
   "projects": [
     {
+      "name": "Trello Cursor Runner",
+      "card_pattern": "^\\[RUNNER-[0-9]+\\]",
+      "repository": "agrana/trello-cursor-runner",
+      "checkout": "/home/alfonso/Documents/code/trello-cursor-runner",
+      "base": "main",
+      "context_cards": ["6af053fc7753f7bebf3b6dd7"],
+      "checks": [["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]],
+      "required_checks": ["test"]
+    },
+    {
       "name": "Uno Decision Arena",
       "card_pattern": "^\\[UNO-[0-9]+\\]",
       "repository": "agrana/agent-arena",
