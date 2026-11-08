@@ -21,8 +21,6 @@ import urllib.parse
 import urllib.request
 import uuid
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG = ROOT / "config.json"
 FIELDS = "id,name,desc,idBoard,idList,idLabels,labels,closed,pos,shortUrl"
 TERMINAL = {"blocked", "interrupted", "review", "handoff", "cancelled"}
 
@@ -39,9 +37,37 @@ def now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def default_config_path():
+    explicit = os.environ.get("TRELLO_CURSOR_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config").expanduser()
+    return root / "trello-cursor-runner" / "config.json"
+
+
+def load_config(path):
+    path = Path(path).expanduser()
+    try:
+        config = json.loads(path.read_text())
+    except FileNotFoundError:
+        raise Failure(f"Configuration not found: {path}. Copy config.example.json to this local path and fill in your settings, or use --config PATH.") from None
+    except (OSError, ValueError):
+        raise Failure(f"Cannot read configuration as JSON: {path}") from None
+    if not isinstance(config, dict):
+        raise Failure(f"Configuration must be a JSON object: {path}")
+    for key in ("state_dir", "metrics_file", "credential_file", "skill_dir", "cursor_binary"):
+        if config.get(key):
+            config[key] = str(Path(config[key]).expanduser())
+    for project in config.get("projects", []):
+        project["checkout"] = str(Path(project["checkout"]).expanduser())
+        project["checks"] = [[str(Path(arg).expanduser()) if arg.startswith("~/") else arg for arg in check]
+                             for check in project.get("checks", [])]
+    return config
+
+
 def load_credentials(path):
     result = {}
-    if Path(path).exists():
+    if path and Path(path).is_file():
         for line in Path(path).read_text().splitlines():
             key, sep, value = line.partition("=")
             if sep and key in {"TRELLO_API_KEY", "TRELLO_TOKEN"}:
@@ -624,11 +650,12 @@ def ci_state(checks, required):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, default=default_config_path(),
+                        help="Local JSON settings (default: TRELLO_CURSOR_CONFIG or $XDG_CONFIG_HOME/trello-cursor-runner/config.json)")
     parser.add_argument("command", choices=["preview", "run", "status", "pause", "resume", "retry", "handoff"])
     parser.add_argument("card_id", nargs="?")
     args = parser.parse_args()
-    config = json.loads(args.config.read_text())
+    config = load_config(args.config)
     state = Path(config["state_dir"]).expanduser()
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.command == "pause":
@@ -644,11 +671,14 @@ def main():
         print(json.dumps({"paused": (state / "PAUSED").exists(), "runs": [
             {k: r.get(k) for k in ("run_id", "card_id", "status", "started", "updated", "branch", "worktree", "pr_url", "message")}
             for r in store.all()]}, indent=2))
+        store.close()
         return
-    api = Trello(load_credentials(Path(config["credential_file"]).expanduser()))
+    api = Trello(load_credentials(config.get("credential_file")))
     if args.command == "preview":
         store = Store(state / "runs.sqlite3") if (state / "runs.sqlite3").exists() else None
         print(json.dumps(Runner(config, api, store).preview(), indent=2))
+        if store:
+            store.close()
         return
     with process_lock(state) as fd:
         store = Store(state / "runs.sqlite3")

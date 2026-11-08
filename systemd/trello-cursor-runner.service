@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/Documents/code/trello-cursor-runner
-ExecStart=/usr/bin/python3 %h/Documents/code/trello-cursor-runner/runner.py run
+EnvironmentFile=%h/.config/trello-cursor-runner/service.env
+ExecStart=/usr/bin/python3 ${TRELLO_CURSOR_RUNNER} run
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 UMask=0077
 TimeoutStartSec=125min

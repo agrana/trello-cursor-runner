@@ -1,5 +1,5 @@
 [Unit]
-Description=Poll the Apps Trello board for Cursor assignments every minute
+Description=Poll the configured Trello board for Cursor assignments every minute
 
 [Timer]
 OnCalendar=*-*-* *:*:00

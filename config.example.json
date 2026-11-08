@@ -1,0 +1,36 @@
+{
+  "board_id": "YOUR_BOARD_ID",
+  "ready_label": "ready_for_cursor",
+  "lists": {
+    "in_progress": "YOUR_IN_PROGRESS_LIST_ID",
+    "review": "YOUR_REVIEW_LIST_ID",
+    "blocked": "YOUR_BLOCKED_LIST_ID",
+    "done": "YOUR_DONE_LIST_ID"
+  },
+  "state_dir": "~/.local/state/trello-cursor-runner",
+  "metrics_file": "",
+  "credential_file": "~/.config/trello-cursor-runner/credentials.env",
+  "skill_dir": "~/.local/share/agent-skills/trello-delivery",
+  "cursor_binary": "cursor-agent",
+  "model": "auto",
+  "run_timeout_seconds": 7200,
+  "agent_timeout_seconds": 3600,
+  "repair_timeout_seconds": 1200,
+  "check_timeout_seconds": 900,
+  "ci_timeout_seconds": 1200,
+  "ci_poll_seconds": 30,
+  "ci_discovery_seconds": 60,
+  "max_repairs": 1,
+  "projects": [
+    {
+      "name": "Example project",
+      "card_pattern": "^\\[PROJECT-[0-9]+\\]",
+      "repository": "YOUR_GITHUB_OWNER/YOUR_REPOSITORY",
+      "checkout": "~/path/to/your/checkout",
+      "base": "main",
+      "context_cards": ["YOUR_PROJECT_BRIEF_CARD_ID"],
+      "checks": [["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]],
+      "required_checks": ["YOUR_CI_CHECK_NAME"]
+    }
+  ]
+}

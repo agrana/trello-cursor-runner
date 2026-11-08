@@ -21,7 +21,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -71,7 +71,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 4,
@@ -121,7 +121,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 8,
@@ -171,7 +171,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -229,7 +229,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 16,
@@ -279,7 +279,7 @@
       "type": "stat",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 20,
@@ -329,7 +329,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -372,7 +372,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -415,7 +415,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 0,
@@ -458,7 +458,7 @@
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
-        "uid": "prometheus"
+        "uid": "${datasource}"
       },
       "gridPos": {
         "x": 12,
@@ -496,22 +496,19 @@
       }
     }
   ],
-  "links": [
-    {
-      "title": "Workflow reference",
-      "type": "link",
-      "url": "https://trello.com/c/gaq6tKcD",
-      "targetBlank": true
-    },
-    {
-      "title": "Runner repository",
-      "type": "link",
-      "url": "https://github.com/agrana/trello-cursor-runner",
-      "targetBlank": true
-    }
-  ],
+  "links": [],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "options": [],
+        "current": {}
+      }
+    ]
   },
   "annotations": {
     "list": []

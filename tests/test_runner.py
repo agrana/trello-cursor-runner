@@ -1,13 +1,18 @@
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from runner import (Failure, Runner, Store, ci_state, dependency_cards, eligible,
-                    load_credentials, process_lock, project_for, remote_repository)
+                    default_config_path, load_config, load_credentials, main,
+                    process_lock, project_for, remote_repository)
 
 
 def configuration(root):
@@ -76,6 +81,51 @@ class SimulatedRunner(Runner):
         run["pr_url"] = "https://github.com/acme/widget/pull/1"
         run["message"] = "Verified PR and acceptance evidence."
         self.store.save(run)
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_user_settings_are_selected_independently_of_checkout(self):
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": "/tmp/example-user-config"}, clear=True):
+            self.assertEqual(default_config_path(), Path("/tmp/example-user-config/trello-cursor-runner/config.json"))
+        with patch.dict(os.environ, {"HOME": "/tmp/example-home"}, clear=True):
+            self.assertEqual(default_config_path(), Path("/tmp/example-home/.config/trello-cursor-runner/config.json"))
+        with patch.dict(os.environ, {"TRELLO_CURSOR_CONFIG": "/tmp/explicit.json", "XDG_CONFIG_HOME": "/tmp/unused"}, clear=True):
+            self.assertEqual(default_config_path(), Path("/tmp/explicit.json"))
+
+    def test_explicit_config_overrides_environment_in_real_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            selected = root / "selected.json"
+            selected.write_text(json.dumps(configuration(root)))
+            with patch.dict(os.environ, {"TRELLO_CURSOR_CONFIG": str(root / "missing.json")}):
+                with patch.object(sys, "argv", ["runner.py", "--config", str(selected), "status"]):
+                    with contextlib.redirect_stdout(io.StringIO()) as output:
+                        main()
+            self.assertEqual(json.loads(output.getvalue())["runs"], [])
+            self.assertTrue((root / "state" / "runs.sqlite3").exists())
+
+    def test_local_paths_expand_and_check_arguments_remain_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = configuration(root)
+            config.update(state_dir="~/state", cursor_binary="~/.local/bin/cursor-agent")
+            config["projects"][0].update(checkout="~/checkout", checks=[["~/venv/bin/python", "-c", "print('literal $VALUE')"]])
+            path = root / "settings.json"
+            path.write_text(json.dumps(config))
+            with patch.dict(os.environ, {"HOME": str(root)}):
+                loaded = load_config(path)
+            self.assertEqual(loaded["state_dir"], str(root / "state"))
+            self.assertEqual(loaded["cursor_binary"], str(root / ".local/bin/cursor-agent"))
+            self.assertEqual(loaded["projects"][0]["checks"][0], [str(root / "venv/bin/python"), "-c", "print('literal $VALUE')"])
+
+    def test_missing_config_has_setup_guidance_and_no_repository_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(Failure, "config.example.json"):
+                load_config(Path(tmp) / "missing.json")
+
+    def test_credentials_can_come_only_from_environment(self):
+        with patch.dict(os.environ, {"TRELLO_API_KEY": "fixture-key", "TRELLO_TOKEN": "fixture-token"}, clear=True):
+            self.assertEqual(load_credentials(None), {"TRELLO_API_KEY": "fixture-key", "TRELLO_TOKEN": "fixture-token"})
 
 
 class QueueTests(unittest.TestCase):
