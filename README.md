@@ -1,12 +1,14 @@
 # Trello Cursor Runner
 
-A local, single-host queue that turns released Trello cards into verified pull requests using Cursor CLI. The configured board is polled every minute with the supplied timer. Empty polls make no model calls.
+A local, single-host queue that turns released Trello cards into verified pull requests using Cursor CLI. The configured board is polled every minute with the supplied timer.
 
 ## Assignment
 
-A card must be open, in the configured **In Progress** list, and carry the configured routing label (default: **`ready_for_cursor`**). List and label can be applied in either order. The runner never releases the backlog itself.
+A card must be open, in the configured **In Progress** list, and have the configured routing label (default: **`ready_for_cursor`**). List and label can be applied in either order. The runner never picks from the backlog itself.
 
-Project mappings are local configuration: each card pattern identifies its repository, base branch, project brief/contract, verification commands and required CI checks. Dependencies declared under Dependencies, Dependency links or Depends on must be in the configured Done list. Unmapped projects and missing acceptance criteria are blocked rather than guessed.
+Project mappings are local configuration: each card pattern identifies its repository, base branch, project brief/contract, verification commands and required CI checks. 
+
+Dependencies declared under Dependencies, Dependency links or Depends on must be in the configured Done list. Unmapped projects and missing acceptance criteria are blocked.
 
 The shared delivery contract assigns interactive planning, automatic Cursor execution and explicitly chosen backup execution. Set `skill_dir` to the installed contract's directory; a copy must be accessible in any remote execution environment too.
 
