@@ -208,6 +208,14 @@ class QueueTests(unittest.TestCase):
         with self.assertRaises(Failure):
             dependency_cards(current, [], self.config)
 
+    def test_depends_on_heading_is_enforced_for_existing_board_cards(self):
+        current = dict(card(), desc="## Depends on\nTASK-2 (Done).\n## Unified acceptance criteria\nWorks")
+        dependency = dict(card(), id="dep", name="[TASK-2] Prerequisite", idList="active")
+        with self.assertRaisesRegex(Failure, "not Done"):
+            dependency_cards(current, [dependency], self.config)
+        dependency["idList"] = "done"
+        self.assertEqual(dependency_cards(current, [dependency], self.config)[0]["id"], "dep")
+
     def test_changed_task_stops_publication(self):
         run = {"card_id": "task", "card": card()}
         self.api.cards["task"]["desc"] += "\nChanged requirement"

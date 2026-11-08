@@ -116,7 +116,7 @@ def project_for(card, config):
 
 
 def dependency_cards(card, cards, config):
-    sections = re.findall(r"(?ims)^#{1,6}\s+Dependenc(?:ies|y links)\s*\n(.*?)(?=^#{1,6}\s|\Z)", card.get("desc", ""))
+    sections = re.findall(r"(?ims)^#{1,6}\s+(?:Dependencies|Dependency links|Depends on)\s*\n(.*?)(?=^#{1,6}\s|\Z)", card.get("desc", ""))
     text = "\n".join(sections)
     keys = set(re.findall(r"\b[A-Z][A-Z0-9]*-\d+\b", text))
     short_ids = set(re.findall(r"https://trello\.com/c/([A-Za-z0-9]+)", text))
@@ -408,7 +408,7 @@ class Runner:
         project = project_for(card, self.config)
         cards = self.api.request("GET", f"/boards/{self.config['board_id']}/cards", fields=FIELDS, filter="all")
         dependencies = dependency_cards(card, cards, self.config)
-        if not re.search(r"(?im)^#{1,6}\s+(?:Acceptance criteria|Current acceptance|Definition of Done|Outcome)\b", card.get("desc", "")) and not card.get("checklists"):
+        if not re.search(r"(?im)^#{1,6}\s+(?:(?:(?:Unified|Current)\s+)?Acceptance(?: criteria)?|Definition of Done|Outcome)\b", card.get("desc", "")) and not card.get("checklists"):
             raise Failure("Card needs explicit acceptance criteria or an acceptance checklist")
         briefs = [self.api.card(card_id, full=True) for card_id in project["context_cards"]]
         # Respect additional explicitly linked execution-contract cards on this board.
