@@ -832,7 +832,7 @@ def main():
             if not run or run["status"] not in TERMINAL:
                 raise Failure("Only a reconciled terminal run can be retried/handed off")
             if args.command == "retry":
-                project = run.get("project") or project_for(run["card"], config)
+                project = run.get("project") or project_for(api.card(run["card_id"]), config)
                 prs = json.loads(runner.command(["gh", "pr", "list", "--repo", project["repository"], "--head", run["branch"],
                                                 "--state", "all", "--json", "url,state"]))
                 if prs or run.get("pr_url"):

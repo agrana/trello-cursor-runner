@@ -10,3 +10,6 @@ config.json
 config.local.json
 service.env
 credentials.env
+dist/
+# Private, machine-specific handoff; portable guidance lives in architecture.md.
+/docs/jira-gitlab-handoff.md

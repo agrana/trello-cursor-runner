@@ -165,6 +165,8 @@ class PullRequests:
         required = project.get("required_checks", [])
         def state(sha):
             checks = self.commit_checks(link["repository"], sha)
+            if not checks and not required and project.get("allow_no_ci"):
+                return "not_configured"
             value = self.check_state(checks, required)
             if value == "passed" and not any(c.get("conclusion", c.get("state")) == "SUCCESS" for c in checks):
                 return "pending"  # A set of skipped/neutral jobs is not passing CI evidence.
@@ -173,6 +175,10 @@ class PullRequests:
         merge_sha = pr.get("merge_commit_sha")
         merged = state(merge_sha) if merge_sha else "pending"
         return head, merged
+
+    @staticmethod
+    def merge_ready(states):
+        return all(state in {"passed", "not_configured"} for state in states)
 
     def transition(self, link, run, target, reason, pr):
         run["lifecycle_transition"] = {"target": target, "reason": reason, "pr_head": pr["head"]["sha"],
@@ -188,7 +194,7 @@ class PullRequests:
         target = transition["target"]
         if target == "done":
             states = self.merge_states(link, pr, run["project"])
-            if not pr.get("merged") or states != ("passed", "passed"):
+            if not pr.get("merged") or not self.merge_ready(states):
                 # A changed/rerun check revokes a pending Done move.
                 run["status"] = "review"
                 self.r.store.save(run)
@@ -240,8 +246,13 @@ class PullRequests:
                 states = self.merge_states(link, pr, source["project"])
                 link["merge_ci"] = {"head": states[0], "merge": states[1]}
                 self.r.store.save_link(link)
-                if states == ("passed", "passed"):
-                    self.transition(link, source, "done", "PR merged; CI passed on both the final PR head and merged commit.", pr)
+                if self.merge_ready(states):
+                    reason = "PR merged; CI passed on both the final PR head and merged commit."
+                    if "not_configured" in states:
+                        reason = ("PR merged; project allows no CI (allow_no_ci=true, no required checks). "
+                                  f"Final PR head checks: {states[0]}; merged commit checks: {states[1]}. "
+                                  "Absent checks accepted under this policy; no CI success inferred.")
+                    self.transition(link, source, "done", reason, pr)
                 elif "failed" in states:
                     if source["status"] != "blocked" or link["status"] != "merged_ci_failed":
                         self.transition(link, source, "blocked", "PR merged but CI failed. Inspect the failing checks; merged-commit CI monitoring continues.", pr)

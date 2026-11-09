@@ -199,6 +199,43 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(len(self.store.all()), 2)
         self.assertEqual(self.runner.executions, 2)
 
+    def test_retry_uses_corrected_live_title_when_initial_mapping_failed(self):
+        self.check_retry_after_mapping_failure([])
+
+    def test_retry_still_refuses_an_existing_pr_after_title_correction(self):
+        self.check_retry_after_mapping_failure([{"url": "https://github.com/acme/widget/pull/1", "state": "OPEN"}])
+
+    def check_retry_after_mapping_failure(self, prs):
+        config_path = self.root / "config.json"
+        config_path.write_text(json.dumps(self.config))
+        state = Path(self.config["state_dir"])
+        state.mkdir()
+        store = Store(state / "runs.sqlite3")
+        old_card = dict(card(), name="Investigate telemetry")
+        run = {"run_id": "failed-routing", "card_id": "task", "card": old_card,
+               "status": "blocked", "started": "2026-11-08T15:24:03+00:00", "branch": "cursor/failed-routing"}
+        store.save(run)
+        store.close()
+        argv = ["runner.py", "--config", str(config_path), "retry", "task"]
+        with patch.object(sys, "argv", argv), patch("runner.load_credentials", return_value={}), \
+                patch("runner.Trello", return_value=self.api), \
+                patch.object(Runner, "command", return_value=json.dumps(prs)) as command, \
+                contextlib.redirect_stdout(io.StringIO()):
+            if prs:
+                with self.assertRaisesRegex(Failure, "A PR already exists"):
+                    main()
+            else:
+                main()
+        command.assert_called_once_with(["gh", "pr", "list", "--repo", "acme/widget", "--head",
+                                         "cursor/failed-routing", "--state", "all", "--json", "url,state"])
+        store = Store(state / "runs.sqlite3")
+        self.addCleanup(store.close)
+        saved = store.latest("task")
+        self.assertEqual(saved["status"], "blocked" if prs else "released")
+        self.assertEqual(saved["card"]["name"], old_card["name"])
+        self.assertEqual(self.api.cards["task"], card())
+        self.assertEqual(self.api.comments, [])
+
     def test_reservation_is_durable_before_executor(self):
         def execute(run):
             self.assertEqual(self.store.latest("task")["status"], "running")

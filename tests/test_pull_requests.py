@@ -315,10 +315,81 @@ class PullRequestTests(unittest.TestCase):
         self.assertEqual(self.api.cards["task"]["idList"], "blocked")
         self.assertNotEqual(self.store.latest("task")["status"], "done")
 
-    def test_missing_ci_is_not_a_merge_success_even_with_no_ci_opt_in(self):
+    def test_no_ci_opt_in_completes_merged_pr_without_claiming_ci_passed(self):
         self.source["project"].update(required_checks=[], allow_no_ci=True)
         self.store.save(self.source)
         self.merged()
+        self.gh.checks.clear()
+        self.runner.tick()
+        self.assertEqual(self.api.cards["task"]["idList"], "done")
+        self.assertEqual(self.store.latest("task")["status"], "done")
+        self.assertEqual(self.store.link(self.source["pr_url"])["merge_ci"],
+                         {"head": "not_configured", "merge": "not_configured"})
+        self.assertIn("allow_no_ci=true", self.api.comments[-1][2])
+        self.assertNotIn("CI passed", self.api.comments[-1][2])
+        comments = len(self.api.comments)
+        self.runner.tick()
+        self.assertEqual(len(self.api.comments), comments)
+        self.assertEqual(self.runner.executions, 0)
+
+    def test_no_ci_opt_in_accepts_passing_head_with_no_merge_checks(self):
+        self.source["project"].update(required_checks=[], allow_no_ci=True)
+        self.store.save(self.source)
+        self.merged()
+        self.gh.checks["c" * 40] = []
+        self.runner.tick()
+        self.assertEqual(self.api.cards["task"]["idList"], "done")
+        self.assertEqual(self.store.link(self.source["pr_url"])["merge_ci"],
+                         {"head": "passed", "merge": "not_configured"})
+
+    def test_no_ci_opt_in_never_bypasses_required_checks(self):
+        self.source["project"]["allow_no_ci"] = True
+        self.store.save(self.source)
+        self.merged()
+        self.gh.checks.clear()
+        self.runner.tick()
+        self.assertEqual(self.api.cards["task"]["idList"], "review")
+
+    def test_missing_ci_without_opt_in_remains_pending(self):
+        self.source["project"]["required_checks"] = []
+        self.store.save(self.source)
+        self.merged()
+        self.gh.checks.clear()
+        self.runner.tick()
+        self.assertEqual(self.api.cards["task"]["idList"], "review")
+
+    def test_no_ci_opt_in_preserves_existing_check_results(self):
+        self.source["project"].update(required_checks=[], allow_no_ci=True)
+        self.store.save(self.source)
+        self.merged()
+        for conclusion in ("failure", None, "skipped"):
+            for sha in ("a" * 40, "c" * 40):
+                with self.subTest(conclusion=conclusion, sha=sha):
+                    self.gh.checks = {sha: [check(conclusion)]}
+                    self.runner.tick()
+                    self.assertEqual(self.store.link(self.source["pr_url"])["merge_ci"][
+                        "head" if sha == "a" * 40 else "merge"],
+                        "failed" if conclusion == "failure" else "pending")
+                    if conclusion == "failure":
+                        self.assertEqual(self.api.cards["task"]["idList"], "blocked")
+                    self.assertNotEqual(self.api.cards["task"]["idList"], "done")
+
+    def test_no_ci_done_move_rechecks_for_new_failure_on_retry(self):
+        self.source["project"].update(required_checks=[], allow_no_ci=True)
+        self.store.save(self.source)
+        self.merged()
+        self.gh.checks.clear()
+        self.api.fail_move = True
+        with self.assertRaises(Failure):
+            self.runner.tick()
+        self.assertEqual(self.store.latest("task")["status"], "done_pending")
+        self.gh.checks["c" * 40] = [check("failure")]
+        self.runner.tick()
+        self.assertEqual(self.api.cards["task"]["idList"], "blocked")
+
+    def test_no_ci_open_pr_never_completes(self):
+        self.source["project"].update(required_checks=[], allow_no_ci=True)
+        self.store.save(self.source)
         self.gh.checks.clear()
         self.runner.tick()
         self.assertEqual(self.api.cards["task"]["idList"], "review")
