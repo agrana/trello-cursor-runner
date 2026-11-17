@@ -12,11 +12,11 @@ from unittest.mock import patch
 
 from runner import (Failure, Runner, Store, ci_state, dependency_cards, eligible,
                     default_config_path, load_config, load_credentials, main,
-                    process_lock, project_for, remote_repository)
+                    normalize_executors, process_lock, project_for, remote_repository)
 
 
 def configuration(root):
-    return {
+    return normalize_executors({
         "board_id": "board", "ready_label": "ready_for_cursor",
         "lists": {"in_progress": "active", "review": "review", "blocked": "blocked", "done": "done"},
         "state_dir": str(root / "state"), "model": "auto", "environment": {},
@@ -26,7 +26,7 @@ def configuration(root):
                       "checkout": str(root / "source"), "base": "main", "context_cards": ["brief"],
                       "checks": [["python3", "-c", "from pathlib import Path; assert Path('feature.txt').read_text() == 'implemented\\n'"]],
                       "required_checks": ["quality"]}]
-    }
+    })
 
 
 def card():
@@ -413,6 +413,7 @@ Path(report).write_text(json.dumps({"status":"complete","summary":"Adds the requ
             skill.mkdir()
             (skill / "SKILL.md").write_text("Fixture delivery contract.")
             config.update(cursor_binary=str(fake_cursor), skill_dir=str(skill))
+            config["executors"]["cursor"]["binary"] = str(fake_cursor)
             config["projects"][0]["checks"] = [["python3", "-c", "from pathlib import Path; assert Path('feature.txt').read_text() == 'implemented\\n'"]]
             api = FakeTrello()
             store = Store(root / "state.sqlite3")

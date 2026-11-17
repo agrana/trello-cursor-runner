@@ -1,6 +1,6 @@
 # Sharing the runner source
 
-This is a standalone source repository for Python 3.11+ on POSIX. It includes a Linux systemd scheduler; other POSIX hosts need their own scheduler. The implementation currently supports Trello, Cursor and GitHub. The [adaptation guide](architecture.md) describes future Jira, Kiro and GitLab integrations.
+This is a standalone source repository for Python 3.11+ on POSIX. It includes a Linux systemd scheduler; other POSIX hosts need their own scheduler. The implementation currently supports Trello, Cursor, Kiro and GitHub. The [adaptation guide](architecture.md) describes future Jira and GitLab integrations.
 
 ## Build an uploadable archive
 
@@ -40,7 +40,7 @@ The source checkout already has Git metadata and a GitHub origin. Inspect `git r
 
 For a new repository, extract the source ZIP, initialize Git in the extracted project folder and add the new repository as its remote. To upload files through the GitHub interface, upload the extracted contents, including `.github/workflows/ci.yml` and `.gitignore`; uploading just the ZIP stores an archive rather than making its contents the repository source.
 
-The bundled GitHub Actions workflow runs the unit/integration fixtures without real task updates, agent calls or hosted PR creation. Repository tests need Python and Git; actual execution additionally needs authenticated Trello, Cursor and GitHub access plus the target project's tools.
+The bundled GitHub Actions workflow runs the unit/integration fixtures without real task updates, agent calls or hosted PR creation. Repository tests need Python and Git; actual execution additionally needs authenticated Trello, GitHub and the configured executor CLIs (Cursor and/or Kiro) plus the target project's tools.
 
 ## Configure another computer
 

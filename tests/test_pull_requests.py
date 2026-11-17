@@ -457,6 +457,7 @@ Path(report).write_text(json.dumps({'status':'complete','summary':'Fixes the bou
             skill.mkdir()
             (skill / "SKILL.md").write_text("Fixture delivery contract")
             config.update(cursor_binary=str(cursor), skill_dir=str(skill))
+            config["executors"]["cursor"]["binary"] = str(cursor)
             config["projects"][0]["checks"] = [["python3", "-c", "from pathlib import Path; assert Path('feature.txt').read_text() == 'fixed\\n'"]]
             board = Board()
             board.cards["task"].update(idList="review", labels=[])

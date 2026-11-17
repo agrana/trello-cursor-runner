@@ -1,12 +1,12 @@
 # Trello Cursor Runner
 
-A local, single-host queue that turns released Trello cards into verified pull requests using Cursor CLI. The configured board is polled every minute with the supplied timer.
+A local, single-host queue that turns released Trello cards into verified pull requests using Cursor CLI or Kiro CLI. The configured board is polled every minute with the supplied timer.
 
 ## Portable project
 
 This repository includes the runner, tests, GitHub Actions workflow, example configuration, systemd units, optional Grafana dashboard and a [standalone executor contract](skills/runner-execution/SKILL.md). No Python packages need to be installed.
 
-**Implemented:** Trello + Cursor CLI + GitHub. **Adaptation design:** Jira + Kiro + GitLab, using the work environment's `twg` and `glab` tools. Jira/GitLab/Kiro integrations are not implemented; changing the board URL or CLI binary alone does not enable them. See [architecture and adaptation](docs/architecture.md).
+**Implemented:** Trello + Cursor CLI + Kiro CLI + GitHub. **Future adaptation:** Jira + GitLab, using the work environment's `twg` and `glab` tools. Jira/GitLab are not implemented; changing the board URL alone does not enable them. See [architecture and adaptation](docs/architecture.md).
 
 To prepare a source ZIP for GitHub upload or transfer to another computer, run:
 
@@ -18,21 +18,34 @@ The archive uses an explicit file list and excludes local configuration, credent
 
 ## Assignment
 
-A card must be open, in the configured **In Progress** list, and have the configured routing label (default: **`ready_for_cursor`**). List and label can be applied in either order. The runner never picks from the backlog itself.
+A card must be open, in the configured **In Progress** list, and have exactly one configured executor routing label. Defaults: **`ready_for_cursor`** for Cursor and **`ready_for_kiro`** for Kiro. List and label can be applied in either order. Cards with both (or otherwise ambiguous) executor labels are refused. The runner never picks from the backlog itself.
 
-Project mappings are local configuration: each card pattern identifies its repository, base branch, project brief/contract, verification commands and required CI checks. 
+Project mappings are local configuration: each card pattern identifies its repository, base branch, project brief/contract, verification commands and required CI checks.
 
 Dependencies declared under Dependencies, Dependency links or Depends on must be in the configured Done list. Unmapped projects and missing acceptance criteria are blocked.
 
-The shared delivery contract assigns interactive planning, automatic Cursor execution and explicitly chosen backup execution. Set `skill_dir` to the installed contract's directory, or to the absolute path of this repository's `skills/runner-execution` directory for the bundled standalone executor contract. A copy must be accessible in any remote execution environment too.
+The shared delivery contract assigns interactive planning, automatic Cursor or Kiro execution and explicitly chosen backup execution. Set `skill_dir` to the installed contract's directory, or to the absolute path of this repository's `skills/runner-execution` directory for the bundled standalone executor contract. A copy must be accessible in any remote execution environment too.
+
+## Executors
+
+One shared queue, SQLite store and host lock serve every configured executor. Configure them under `executors`, mapping each name to its exact routing label, binary, model and optional agent:
+
+| Executor | Routing label | Binary | Model |
+| --- | --- | --- | --- |
+| `cursor` | `ready_for_cursor` | `cursor-agent` | required (example default `auto`) |
+| `kiro` | `ready_for_kiro` | `kiro-cli` | optional; omit/null uses the Kiro CLI default and records that truthfully |
+
+Legacy top-level `ready_label` / `cursor_binary` / `model` remain supported and synthesize a Cursor-only `executors` map when `executors` is absent. Existing Cursor installs keep working without config changes. Never pass Cursor's `auto` model to Kiro; there is no silent fallback between executors.
+
+Durable runs and PR links store executor identity and model. Initial implementation, bounded repair and PR feedback always reuse that recorded ownership. Historical records without an executor field default to Cursor.
 
 ## Execution and recovery
 
-One OS lock serializes all projects on this host. SQLite records the reservation before the routing label is consumed or Cursor launches. Child commands inherit the lock so a surviving child prevents another wrapper from taking ownership after a crash.
+One OS lock serializes all projects and executors on this host. SQLite records the reservation before the routing label is consumed or the executor launches. Child commands inherit the lock so a surviving child prevents another wrapper from taking ownership after a crash.
 
-The runner fetches the full task, checklists, attachment metadata, recent comments, project brief and linked execution contract. It creates an isolated Git worktree from the configured remote base. Cursor Auto designs/plans, implements, runs the task's checks and writes an acceptance report. The wrapper independently reruns configured checks, owns commit/push/PR publication and verifies remote PR identity and CI on its exact head. Failed checks get at most one bounded Cursor repair attempt within the overall two-hour run budget.
+The runner fetches the full task, checklists, attachment metadata, recent comments, project brief and linked execution contract. It creates an isolated Git worktree from the configured remote base. The selected executor designs/plans, implements, runs the task's checks and writes an acceptance report. The wrapper independently reruns configured checks, owns commit/push/PR publication and verifies remote PR identity and CI on its exact head. Failed checks get at most one bounded repair attempt with the same executor within the overall two-hour run budget.
 
-The owner’s active checkout and uncommitted work are preserved. Cursor is instructed to prepare worktree-local dependencies using the project’s pinned runtime; no production environment files are copied. File/workspace selection and Cursor's `--force` are not a sandbox: this is an explicitly authorized local coding agent running under the owner's account.
+The owner’s active checkout and uncommitted work are preserved. The executor is instructed to prepare worktree-local dependencies using the project’s pinned runtime; no production environment files are copied. File/workspace selection and trust flags are not a sandbox: this is an explicitly authorized local coding agent running under the owner's account.
 
 Successful acceptance and required CI move a card to the configured Review list with its PR and evidence. The runner never merges or deploys. Configure required CI job names per project. For a project without remote CI, explicitly set `allow_no_ci: true` with an empty `required_checks` list and appropriate local checks. After a discovery grace period, absence of remote checks is reported explicitly rather than claimed as CI success. This opt-in also permits automatic Done after merge when either commit has no checks.
 
@@ -44,7 +57,7 @@ Enable `pull_requests.enabled` in local configuration to continue monitoring lin
 
 | PR event | Card and execution behavior |
 | --- | --- |
-| Open, with new published feedback | After a short quiet period, move Review to In Progress and resume Cursor on the existing branch/worktree/PR. Verify, push fixes, reply with evidence, resolve addressed inline threads, then return to Review. No routing label is needed for these follow-ups. |
+| Open, with new published feedback | After a short quiet period, move Review to In Progress and resume the original executor on the existing branch/worktree/PR. Verify, push fixes, reply with evidence, resolve addressed inline threads, then return to Review. No routing label is needed for these follow-ups. |
 | Open, no new feedback | Continue polling without launching a model. |
 | Closed without merging | Move the card to Blocked with the closure reason and stop monitoring this PR. Investigate before manually handing off or reopening work. |
 | Merged, CI missing/pending | Stop feedback execution; keep checking CI and explain the wait on the card. |
@@ -62,13 +75,13 @@ The existing worktree must be clean and match the linked branch. Only a fast-for
 
 ## Requirements
 
-- A POSIX host with Python 3.11+ including SQLite, Git, GitHub CLI (`gh`) and Cursor CLI (`cursor-agent`). The runner uses Python's standard library; no pip dependencies are required. The bundled scheduler additionally requires Linux and a running systemd user manager. Windows is not supported directly.
-- Cursor authenticated under the account running the service, with access to the configured model and sufficient usage allowance. Check with `cursor-agent status`.
+- A POSIX host with Python 3.11+ including SQLite, Git, GitHub CLI (`gh`) and the configured executor CLIs (`cursor-agent` and/or `kiro-cli`). The runner uses Python's standard library; no pip dependencies are required. The bundled scheduler additionally requires Linux and a running systemd user manager. Windows is not supported directly.
+- Each configured executor authenticated under the account running the service, with access to its model/agent and sufficient usage allowance. Check with `cursor-agent status` or `kiro-cli`. Kiro is invoked as `kiro-cli chat --no-interactive --trust-all-tools --trust-workspace --output-format stream-json` with optional `--model` / `--agent`, using the isolated worktree as cwd.
 - GitHub authentication that can read the project repositories, push task branches, create/update pull requests and inspect CI. PR lifecycle monitoring also needs read access to PR reviews, comments, check runs and commit statuses; responding and resolving threads requires PR write permission. Check `gh auth status` and verify the repository's Git transport works without interactive prompts.
-- Trello API key/token with read/write access to the configured board, including cards, labels and comments. Configure the workflow list IDs and create the routing label on the board.
+- Trello API key/token with read/write access to the configured board, including cards, labels and comments. Configure the workflow list IDs and create each executor routing label on the board.
 - Existing local Git checkouts with the configured GitHub origins and base branches. Each project supplies its own runtime, dependencies, test tools and verification commands; the runner does not replace those requirements.
 - A delivery skill directory containing `SKILL.md` and its referenced files, plus accessible Trello project brief/contract cards and usable acceptance criteria.
-- Network access to Trello, GitHub and Cursor, and disk space for retained worktrees and evidence.
+- Network access to Trello, GitHub and the configured executors, and disk space for retained worktrees and evidence.
 - Optional telemetry: a writable node-exporter textfile directory, Prometheus scraping that exporter and Grafana with a Prometheus datasource. These are not required to execute tasks; leave `metrics_file` empty to disable metrics.
 
 ## Local configuration
@@ -112,7 +125,7 @@ python3 runner.py retry CARD_ID # Deliberately lift local suppression after insp
 python3 runner.py handoff CARD_ID # Release a stopped terminal run for manual continuation
 ```
 
-After `retry`, explicitly restore In Progress and `ready_for_cursor` on the card. A fresh run preserves the old worktree and starts from the remote base; inspect existing work first. If a PR already exists, `retry` refuses a duplicate implementation: use `handoff` and continue the preserved branch/PR with the explicitly chosen executor/model. These controls require the lock and cannot transfer ownership while an old command remains active.
+After `retry`, explicitly restore In Progress and the same executor routing label on the card (for example `ready_for_cursor` or `ready_for_kiro`). A fresh run preserves the old worktree and starts from the remote base; inspect existing work first. If a PR already exists, `retry` refuses a duplicate implementation: use `handoff` and continue the preserved branch/PR with the explicitly chosen executor/model. These controls require the lock and cannot transfer ownership while an old command remains active.
 
 The pause marker persists across service restarts. Removing a routing label is not a cancellation mechanism for a card already claimed. To stop all work immediately, stop the service (its cgroup includes child processes); the next reconciliation reports the interrupted attempt.
 
@@ -171,4 +184,4 @@ python3 -m unittest discover -s tests -v
 python3 runner.py preview
 ```
 
-Tests cover trigger matching, dependency gates, durable ownership, duplicate suppression, pause, interruption and outcome recovery, changed scope, remote identity, required CI and telemetry. PR tests cover bidirectional links, paginated feedback, trusted reviewers, edited comments, deduplicated replies, stale-thread protection, closure, merge CI failures/reruns and Done recovery. Integration fixtures use a fake Cursor executable and hosted APIs with real Git worktrees, independent checks, commits and a local remote push, including feedback fixes on an existing PR. They make no real model calls, Trello changes or GitHub PRs.
+Tests cover trigger matching, multi-executor routing and ambiguous labels, dependency gates, durable ownership, duplicate suppression, pause, interruption and outcome recovery, changed scope, remote identity, required CI and telemetry. PR tests cover bidirectional links, paginated feedback, trusted reviewers, edited comments, deduplicated replies, stale-thread protection, closure, merge CI failures/reruns and Done recovery. Integration fixtures use fake Cursor/Kiro executables and hosted APIs with real Git worktrees, independent checks, commits and a local remote push, including feedback fixes on an existing PR with persisted executor ownership. They make no real model calls, Trello changes or GitHub PRs.

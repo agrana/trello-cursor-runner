@@ -19,6 +19,7 @@ FILES = (
     "pull_requests.py",
     "tests/test_runner.py",
     "tests/test_pull_requests.py",
+    "tests/test_executors.py",
     "docs/architecture.md",
     "docs/sharing.md",
     "skills/runner-execution/SKILL.md",
