@@ -18,6 +18,24 @@ def feedback_fingerprint(item):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def recorded_model_default(run):
+    if "model" in run:
+        return run["model"]
+    return "auto" if run.get("executor", "cursor") == "cursor" else None
+
+
+def ownership_from(source, link=None):
+    executor = (link or {}).get("executor") or source.get("executor", "cursor")
+    if link is not None and "model" in link:
+        model = link["model"]
+    elif "model" in source:
+        model = source["model"]
+    else:
+        model = "auto" if executor == "cursor" else None
+    agent = (link or {}).get("agent") or source.get("agent")
+    return executor, model, agent
+
+
 class PullRequests:
     def __init__(self, runner, failure, check_state, timestamp):
         self.r = runner
@@ -54,7 +72,10 @@ class PullRequests:
                 raise self.fail("PR is already linked to a different card or branch")
             return link
         link = {"pr_url": url, "card_id": run["card_id"], "repository": match[1], "number": int(match[2]),
-                "branch": run["branch"], "base": project["base"], "processed": {}, "rounds": 0, "status": "open"}
+                "branch": run["branch"], "base": project["base"], "processed": {}, "rounds": 0, "status": "open",
+                "executor": run.get("executor", "cursor"), "model": run["model"] if "model" in run else recorded_model_default(run)}
+        if run.get("agent"):
+            link["agent"] = run["agent"]
         self.r.store.save_link(link)
         return link
 
@@ -297,18 +318,28 @@ class PullRequests:
         run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
         folder = self.r.state / "runs" / run_id
         folder.mkdir(parents=True, mode=0o700)
+        executor, model, agent = ownership_from(source, link)
+        if "executor" not in link:
+            link["executor"] = executor
+        if "model" not in link:
+            link["model"] = model
+        if agent and "agent" not in link:
+            link["agent"] = agent
         run = {"run_id": run_id, "card_id": card["id"], "card": card, "status": "running", "kind": "review",
-               "started": self.now(), "model": self.r.config["model"], "run_dir": str(folder), "branch": link["branch"],
+               "started": self.now(), "executor": executor, "model": model, "run_dir": str(folder), "branch": link["branch"],
                "worktree": source["worktree"], "project": source["project"], "pr_url": link["pr_url"],
                "expected_head": pr["head"]["sha"], "feedback": feedback, "message": ""}
+        if agent:
+            run["agent"] = agent
         self.r.store.save(run)
         link.update(attempted_batch=batch, rounds=link["rounds"] + 1)
         self.r.store.save_link(link)
         self.r.deadline = time.monotonic() + self.r.config.get("run_timeout_seconds", 7200)
+        owner = {"cursor": "Cursor", "kiro": "Kiro"}.get(executor, executor)
         try:
             self.r.api.request("PUT", f"/cards/{card['id']}", idList=self.r.config["lists"]["in_progress"])
             self.r.api.comment_once(card["id"], f"[cursor-run:{run_id}:claim]",
-                                    f"Cursor is addressing {len(feedback)} new PR feedback item(s) on the existing branch.\n" + self.r.location(run))
+                                    f"{owner} is addressing {len(feedback)} new PR feedback item(s) on the existing branch.\n" + self.r.location(run))
             self.r.execute_review(run)
         except (self.fail, OSError, ValueError, KeyError) as exc:
             run.update(status="blocked_pending", finished=self.now(), message=f"PR feedback blocked: {exc}\n" + self.r.location(run))

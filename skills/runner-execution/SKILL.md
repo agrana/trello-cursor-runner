@@ -7,6 +7,8 @@ description: Implement a task or review follow-up supplied by this board-driven 
 
 The runner supplies the task context, worktree, report destination and execution mode. Loading this skill starts no poller and assigns no task. Follow the actual runner prompt and repository instructions; preserve the owner's explicit scope and authorization.
 
+Supported automatic executors today are Cursor (`ready_for_cursor`) and Kiro (`ready_for_kiro`) on Trello cards with GitHub pull requests. Jira and GitLab remain future tracker/forge adapters; do not assume they are available from this contract alone.
+
 ## Ownership
 
 The runner owns the claim, routing label, task status, Git branch creation, commit, push, PR publication, review replies and discussion resolution. Prepare code changes and evidence without performing those writes yourself. Do not start another executor or take over another task.

@@ -13,6 +13,17 @@
   "skill_dir": "~/.local/share/agent-skills/trello-delivery",
   "cursor_binary": "cursor-agent",
   "model": "auto",
+  "executors": {
+    "cursor": {
+      "label": "ready_for_cursor",
+      "binary": "cursor-agent",
+      "model": "auto"
+    },
+    "kiro": {
+      "label": "ready_for_kiro",
+      "binary": "kiro-cli"
+    }
+  },
   "run_timeout_seconds": 7200,
   "agent_timeout_seconds": 3600,
   "repair_timeout_seconds": 1200,

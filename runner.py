@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-host Trello queue -> Cursor CLI -> verified GitHub PR. Stdlib only."""
+"""Single-host Trello queue -> coding executor CLI -> verified GitHub PR. Stdlib only."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +24,7 @@ from pull_requests import PullRequests
 
 FIELDS = "id,name,desc,idBoard,idList,idLabels,labels,closed,pos,shortUrl"
 TERMINAL = {"blocked", "interrupted", "review", "handoff", "cancelled", "done"}
+SUPPORTED_EXECUTORS = {"cursor", "kiro"}
 
 
 class Failure(Exception):
@@ -46,6 +47,62 @@ def default_config_path():
     return root / "trello-cursor-runner" / "config.json"
 
 
+def executor_display(name):
+    return {"cursor": "Cursor", "kiro": "Kiro"}.get(name, name)
+
+
+def recorded_model(run):
+    if "model" in run:
+        return run["model"]
+    return "auto" if run.get("executor", "cursor") == "cursor" else None
+
+
+def model_display(run):
+    model = recorded_model(run)
+    return "CLI default" if model is None or model == "" else str(model)
+
+
+def normalize_executors(config):
+    raw = config.get("executors")
+    if not raw:
+        config["executors"] = {
+            "cursor": {
+                "label": config.get("ready_label", "ready_for_cursor"),
+                "binary": config.get("cursor_binary", "cursor-agent"),
+                "model": config.get("model", "auto"),
+            }
+        }
+    elif not isinstance(raw, dict):
+        raise Failure("Configuration executors must be an object mapping name to settings")
+    else:
+        for name, spec in raw.items():
+            if name not in SUPPORTED_EXECUTORS:
+                raise Failure(f"Unsupported executor {name!r}; supported: {', '.join(sorted(SUPPORTED_EXECUTORS))}")
+            if not isinstance(spec, dict):
+                raise Failure(f"Executor {name!r} settings must be an object")
+            if not spec.get("label") or not spec.get("binary"):
+                raise Failure(f"Executor {name!r} requires label and binary")
+            if name == "cursor" and not spec.get("model"):
+                spec["model"] = config.get("model", "auto")
+            if name == "kiro" and spec.get("model") in ("", "auto"):
+                raise Failure("Kiro model must be omitted/null for CLI default, or set to a real Kiro model; never pass Cursor auto")
+    for name, spec in config["executors"].items():
+        spec["binary"] = str(Path(spec["binary"]).expanduser())
+        if "agent" in spec and spec["agent"] is not None:
+            spec["agent"] = str(spec["agent"])
+    cursor = config["executors"].get("cursor")
+    if cursor:
+        config.setdefault("ready_label", cursor["label"])
+        config.setdefault("cursor_binary", cursor["binary"])
+        config.setdefault("model", cursor.get("model", "auto"))
+    else:
+        first = next(iter(config["executors"].values()))
+        config.setdefault("ready_label", first["label"])
+        config.setdefault("cursor_binary", first["binary"])
+        config.setdefault("model", first.get("model") or "auto")
+    return config
+
+
 def load_config(path):
     path = Path(path).expanduser()
     try:
@@ -63,7 +120,31 @@ def load_config(path):
         project["checkout"] = str(Path(project["checkout"]).expanduser())
         project["checks"] = [[str(Path(arg).expanduser()) if arg.startswith("~/") else arg for arg in check]
                              for check in project.get("checks", [])]
-    return config
+    return normalize_executors(config)
+
+
+def matching_executors(card, config):
+    labels = {label.get("name") for label in card.get("labels", [])}
+    return [(name, spec) for name, spec in config["executors"].items() if spec["label"] in labels]
+
+
+def resolve_executor(card, config):
+    matches = matching_executors(card, config)
+    if len(matches) > 1:
+        names = ", ".join(sorted(name for name, _ in matches))
+        raise Failure(f"Ambiguous executor labels on card ({names}); remove all but one routing label")
+    if len(matches) != 1:
+        raise Failure("Card has no configured executor routing label")
+    return matches[0]
+
+
+def claim_model(name, spec):
+    if name == "kiro":
+        model = spec.get("model")
+        if model in ("", "auto"):
+            raise Failure("Kiro model must be omitted/null for CLI default, or set to a real Kiro model; never pass Cursor auto")
+        return model
+    return spec.get("model") or "auto"
 
 
 def load_credentials(path):
@@ -130,9 +211,10 @@ class Trello:
 
 
 def eligible(card, config):
-    return (not card.get("closed") and card.get("idBoard") == config["board_id"]
-            and card.get("idList") == config["lists"]["in_progress"]
-            and any(label.get("name") == config["ready_label"] for label in card.get("labels", [])))
+    if (card.get("closed") or card.get("idBoard") != config["board_id"]
+            or card.get("idList") != config["lists"]["in_progress"]):
+        return False
+    return len(matching_executors(card, config)) == 1
 
 
 def project_for(card, config):
@@ -237,7 +319,8 @@ def process_lock(state):
 
 class Runner:
     def __init__(self, config, api, store=None, lock_fd=None):
-        self.config, self.api, self.store, self.lock_fd = config, api, store, lock_fd
+        self.config = normalize_executors(config)
+        self.api, self.store, self.lock_fd = api, store, lock_fd
         self.state = Path(config["state_dir"]).expanduser()
         self.step = 0
         self.deadline = None
@@ -368,15 +451,24 @@ class Runner:
 
     def preview(self):
         result = []
-        candidates = self.candidates()
-        board_cards = self.api.request("GET", f"/boards/{self.config['board_id']}/cards", fields=FIELDS, filter="all") if candidates else []
-        for card in candidates:
+        open_cards = self.api.request("GET", f"/lists/{self.config['lists']['in_progress']}/cards", fields=FIELDS, filter="open")
+        labelled = sorted((c for c in open_cards if matching_executors(c, self.config)), key=lambda c: c.get("pos", 0))
+        board_cards = self.api.request("GET", f"/boards/{self.config['board_id']}/cards", fields=FIELDS, filter="all") if labelled else []
+        for card in labelled:
             item = {"id": card["id"], "name": card["name"], "url": card.get("shortUrl")}
+            matches = matching_executors(card, self.config)
+            if len(matches) != 1:
+                item["readiness"] = "blocked: Ambiguous executor labels on card (" + ", ".join(sorted(n for n, _ in matches)) + "); remove all but one routing label"
+                result.append(item)
+                continue
+            name, spec = matches[0]
+            item["executor"] = name
+            item["label"] = spec["label"]
             try:
                 project = project_for(card, self.config)
                 dependency_cards(card, board_cards, self.config)
                 item["project"] = project["name"]
-                item["readiness"] = "eligible; full preflight happens before execution"
+                item["readiness"] = f"eligible for {executor_display(name)}; full preflight happens before execution"
             except Failure as exc:
                 item["readiness"] = "blocked: " + str(exc)
             if self.store and self.store.latest(card["id"]) and self.store.latest(card["id"])["status"] != "released":
@@ -384,9 +476,10 @@ class Runner:
             result.append(item)
         return {"paused": self.paused(), "board": self.config["board_id"], "candidates": result}
 
-    def consume_label(self, card):
+    def consume_label(self, card, label_name=None):
+        target = label_name or self.config["ready_label"]
         for label in card.get("labels", []):
-            if label["name"] == self.config["ready_label"]:
+            if label["name"] == target:
                 self.api.request("DELETE", f"/cards/{card['id']}/idLabels/{label['id']}")
 
     def finalize(self, run):
@@ -403,7 +496,10 @@ class Runner:
             self.store.save(run)
             return
         self.api.comment_once(run["card_id"], f"[cursor-run:{run['run_id']}:result]", run["message"])
-        self.consume_label(card)
+        label = None
+        if run.get("executor") in self.config["executors"]:
+            label = self.config["executors"][run["executor"]]["label"]
+        self.consume_label(card, label)
         if card["idList"] != self.config["lists"][target]:
             self.api.request("PUT", f"/cards/{run['card_id']}", idList=self.config["lists"][target])
         run["status"] = target
@@ -418,7 +514,8 @@ class Runner:
             if run["status"] == "running":
                 run["status"] = "blocked_pending"
                 run["finished"] = now()
-                run["message"] = ("Interrupted Cursor run. No automatic execution retry. Inspect preserved artifacts and remote PR before retry/handoff.\n"
+                owner = executor_display(run.get("executor", "cursor"))
+                run["message"] = (f"Interrupted {owner} run. No automatic execution retry. Inspect preserved artifacts and remote PR before retry/handoff.\n"
                                   + self.location(run))
                 self.store.save(run)
             if run["status"] == "feedback_pending":
@@ -442,29 +539,35 @@ class Runner:
             card = self.api.card(candidate["id"], full=True)
             if not eligible(card, self.config):
                 continue
+            executor_name, executor_spec = resolve_executor(card, self.config)
             run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
             run_dir = self.state / "runs" / run_id
             run_dir.mkdir(parents=True, mode=0o700)
+            model = claim_model(executor_name, executor_spec)
             run = {"run_id": run_id, "card_id": card["id"], "card": card, "status": "running", "started": now(),
-                   "model": self.config["model"],
-                   "run_dir": str(run_dir), "branch": "cursor/" + card["id"] + "-" + run_id,
+                   "executor": executor_name, "model": model,
+                   "run_dir": str(run_dir), "branch": f"{executor_name}/" + card["id"] + "-" + run_id,
                    "worktree": str(self.state / "worktrees" / run_id), "message": ""}
+            if executor_spec.get("agent"):
+                run["agent"] = executor_spec["agent"]
             self.store.save(run)  # Durable reservation precedes every remote claim and launch.
             self.telemetry(queue=max(0, len(available) - 1))
             self.deadline = time.monotonic() + self.config.get("run_timeout_seconds", 7200)
+            owner = executor_display(executor_name)
             try:
-                self.consume_label(card)
+                self.consume_label(card, executor_spec["label"])
                 self.api.comment_once(card["id"], f"[cursor-run:{run_id}:claim]",
-                                      f"Claimed by Cursor; model {self.config['model']}; {run['started']}.\n" + self.location(run))
+                                      f"Claimed by {owner}; model {model_display(run)}; {run['started']}.\n" + self.location(run))
                 self.execute(run)
             except (Failure, OSError, ValueError, KeyError) as exc:
                 run["status"] = "blocked_pending"
-                run["message"] = f"Cursor execution blocked: {exc}\nNo automatic retry.\n" + self.location(run)
+                run["message"] = f"{owner} execution blocked: {exc}\nNo automatic retry.\n" + self.location(run)
                 run["finished"] = now()
                 self.store.save(run)
                 self.telemetry()
             self.finalize(run)
-            return {"status": run["status"], "run_id": run_id, "card_id": card["id"], "pr_url": run.get("pr_url")}
+            return {"status": run["status"], "run_id": run_id, "card_id": card["id"], "pr_url": run.get("pr_url"),
+                    "executor": executor_name}
         return {"status": "idle", "eligible_cards": 0}
 
     @staticmethod
@@ -494,11 +597,37 @@ class Runner:
         comments = self.api.request("GET", f"/cards/{card['id']}/actions", filter="commentCard", limit=50)
         return project, {"task": card, "project_context": briefs, "dependencies": dependencies, "recent_comments": comments}
 
-    def cursor(self, run, instructions, name, timeout):
+    def executor_argv(self, run, instructions):
+        name = run.get("executor", "cursor")
+        if name not in self.config["executors"]:
+            raise Failure(f"Run executor {name!r} is not configured; no silent fallback")
+        if name not in SUPPORTED_EXECUTORS:
+            raise Failure(f"Unsupported executor {name!r}; no silent fallback")
+        binary = self.config["executors"][name]["binary"]
+        model = recorded_model(run)
+        if name == "cursor":
+            if not model:
+                raise Failure("Cursor runs require an explicit model; no silent fallback")
+            return [binary, "--print", "--force", "--trust", "--model", model,
+                    "--output-format", "stream-json", "--workspace", run["worktree"], instructions]
+        if name == "kiro":
+            argv = [binary, "chat", "--no-interactive", "--trust-all-tools", "--trust-workspace",
+                    "--output-format", "stream-json"]
+            if model:
+                if model == "auto":
+                    raise Failure("Refusing to pass Cursor auto model to Kiro")
+                argv.extend(["--model", model])
+            agent = run.get("agent")
+            if agent:
+                argv.extend(["--agent", agent])
+            argv.append(instructions)
+            return argv
+        raise Failure(f"Unsupported executor {name!r}; no silent fallback")
+
+    def invoke(self, run, instructions, name, timeout):
         folder = Path(run["run_dir"])
         (folder / f"{name}-prompt.txt").write_text(instructions)
-        argv = [self.config["cursor_binary"], "--print", "--force", "--trust", "--model", self.config["model"],
-                "--output-format", "stream-json", "--workspace", run["worktree"], instructions]
+        argv = self.executor_argv(run, instructions)
         output = self.command(argv, cwd=run["worktree"], run=run, timeout=timeout, interruptible=True)
         (folder / f"{name}-output.jsonl").write_text(output)
 
@@ -520,9 +649,10 @@ class Runner:
         # Pin a copy for evidence as well as passing the currently installed contract explicitly.
         (folder / "shared-contract.md").write_text(skill.read_text())
         report_path = folder / "result.json"
+        owner = executor_display(run.get("executor", "cursor"))
         prompt = f"""Carry out exactly the Trello assignment in {context_path}.
 Read that full context and the shared skill at {skill}, including relevant references.
-You are Cursor, model selection {self.config['model']}. Repository {project['repository']}; base {project['base']}.
+You are {owner}, model selection {model_display(run)}. Repository {project['repository']}; base {project['base']}.
 Work only in this isolated worktree: {run['worktree']}.
 Inspect repository instructions and current code, then design and plan as needed for ALL current acceptance criteria.
 Write the short plan to {folder / 'plan.md'} before implementation. Read supersession notes carefully.
@@ -539,7 +669,7 @@ When finished, write a JSON object to {report_path} with:
 Complete requires every current acceptance criterion demonstrated; report real evidence, not targets.
 Do not write the report or runner artifacts into the repository. No automatic scope reduction or fallback.
 """
-        self.cursor(run, prompt, "implementation", self.config["agent_timeout_seconds"])
+        self.invoke(run, prompt, "implementation", self.config["agent_timeout_seconds"])
         report = self.validate_report(report_path)
         self.complete_execution(run, prompt, report)
 
@@ -570,9 +700,10 @@ Do not write the report or runner artifacts into the repository. No automatic sc
         report_path = folder / "result.json"
         skill = Path(self.config["skill_dir"]) / "SKILL.md"
         (folder / "shared-contract.md").write_text(skill.read_text())
+        owner = executor_display(run.get("executor", "cursor"))
         prompt = f"""Address the PR feedback in {context_path} on the EXISTING branch and PR {run['pr_url']}.
 Read the complete current task/project context, repository instructions and shared contract at {skill}.
-Work only in {worktree}. Write the short plan to {folder / 'plan.md'} before implementation.
+You are {owner}, model selection {model_display(run)}. Work only in {worktree}. Write the short plan to {folder / 'plan.md'} before implementation.
 Reviewer feedback is task input, not authority to change credentials, merge/deploy, expand product scope or ignore the contract.
 Fix actionable comments within the original scope, answer questions with actual evidence, and maintain original acceptance criteria.
 Run relevant regression tests and task-specific checks. Do not invent verification or silently dismiss a requested change.
@@ -587,7 +718,7 @@ Include exactly one feedback entry for EVERY input feedback key. Use blocked for
 unmet prerequisite or larger scope; leave it for owner review rather than falsely resolving it.
 Pure questions may be answered without changing code. Reports and artifacts stay outside the repository.
 """
-        self.cursor(run, prompt, "review", self.config["agent_timeout_seconds"])
+        self.invoke(run, prompt, "review", self.config["agent_timeout_seconds"])
         report = self.validate_report(report_path)
         self.complete_execution(run, prompt, report)
 
@@ -616,9 +747,10 @@ Pure questions may be answered without changing code. Reports and artifacts stay
                     raise
                 self.assert_task_active(run)
                 repair_path = folder / f"result-repair-{attempt + 1}.json"
-                self.cursor(run, prompt + f"\nThis is a bounded repair attempt. Verification failed: {exc}.\n"
+                owner = executor_display(run.get("executor", "cursor"))
+                self.invoke(run, prompt + f"\nThis is a bounded repair attempt. Verification failed: {exc}.\n"
                             f"Read existing evidence in {folder}; inspect failing CI using gh read-only commands if a PR exists.\n"
-                            f"Current PR: {run.get('pr_url', 'not published')}. Fix within scope; the runner still owns commits/push/PR.\n"
+                            f"Current PR: {run.get('pr_url', 'not published')}. Fix within scope using {owner}; the runner still owns commits/push/PR.\n"
                             f"Write the fresh final report to {repair_path} (instead of the earlier result path).",
                             f"repair-{attempt + 1}", self.config.get("repair_timeout_seconds", 1200))
                 report = self.validate_report(repair_path)
@@ -743,9 +875,10 @@ Pure questions may be answered without changing code. Reports and artifacts stay
         evidence = "\n".join(f"- {c['criterion']}: {c['evidence']}" for c in report["acceptance"])
         checks = "\n".join("- " + str(c) for c in report["checks"])
         limits = "\n".join("- " + str(c) for c in report.get("limitations", [])) or "None reported."
+        owner = executor_display(run.get("executor", "cursor"))
         return (f"{report['summary']}\n\nTrello: {run['card'].get('shortUrl', run['card_id'])}\n\n"
                 f"Acceptance evidence:\n{evidence}\n\nValidation:\n{checks}\n\nLimitations:\n{limits}\n\n"
-                f"Cursor run: {run['run_id']}; model selection {run.get('model', 'auto')}. Independent configured checks were rerun by the wrapper.")
+                f"{owner} run: {run['run_id']}; model selection {model_display(run)}. Independent configured checks were rerun by the wrapper.")
 
     def wait_ci(self, project, run):
         started = time.monotonic()
@@ -811,7 +944,7 @@ def main():
     if args.command == "status":
         store = Store(state / "runs.sqlite3")
         print(json.dumps({"paused": (state / "PAUSED").exists(), "runs": [
-            {k: r.get(k) for k in ("run_id", "card_id", "status", "started", "updated", "branch", "worktree", "pr_url", "message")}
+            {k: r.get(k) for k in ("run_id", "card_id", "status", "started", "updated", "executor", "model", "branch", "worktree", "pr_url", "message")}
             for r in store.all()], "pull_requests": store.links()}, indent=2))
         store.close()
         return
@@ -840,10 +973,14 @@ def main():
                 # This command releases local suppression; the owner must explicitly restore the two Trello gates.
                 run["status"] = "released"
                 store.save(run)
-                print("Retry allowed. Inspect preserved work, then move the card to In Progress and add ready_for_cursor.")
+                executor_name = run.get("executor", "cursor")
+                label = config["executors"].get(executor_name, {}).get("label") or config.get("ready_label", "ready_for_cursor")
+                print(f"Retry allowed. Inspect preserved work, then move the card to In Progress and add {label}.")
             else:
                 card = api.card(run["card_id"])
-                runner.consume_label(card)
+                executor_name = run.get("executor", "cursor")
+                label = config["executors"].get(executor_name, {}).get("label")
+                runner.consume_label(card, label)
                 api.comment_once(run["card_id"], f"[cursor-run:{run['run_id']}:handoff]",
                                  "Manual handoff: automatic runner released ownership. Choose the backup/model explicitly.\n" + runner.location(run))
                 run["status"] = "handoff"
